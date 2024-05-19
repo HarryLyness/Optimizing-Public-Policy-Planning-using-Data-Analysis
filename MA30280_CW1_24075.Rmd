@@ -1,0 +1,696 @@
+---
+#pdf_document: default
+pdf_document: null
+geometry: margin=2cm
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r, echo = FALSE, warning=FALSE, message = FALSE}
+library(tinytex)
+library(readxl)
+library(tidyverse)
+library(tmap)
+library(sf)
+library(GGally)
+library(corrplot)
+library(cluster)
+library(tidytext)
+library(knitr)
+library(kableExtra)
+library(factoextra)
+library(broom)
+library(gridExtra)
+library(vtable)
+library(ggh4x)
+```
+
+## Optimizing Public Policy Planning using Data Analysis: A Socio-Economic Consulting Project for Argentina
+
+### Section 0: Introduction 
+
+Argentina is divided into 23 distinct provinces with many differences between them. We analysed provincial data for Argentina using ten global socio-economic indicators for each province. Our main contribution involved identifying provinces with similar socio-economic patterns across Argentina. Our findings provide public policy planners with a birds eye view of the socio-economic development in Argentina, which might help guide the optimization of delivery and planning of possible public policies. Additionally, appropriate changes to our methodology could make our work useful for analyzing development levels and optimizing the planning of public policy, globally and regionally, for other countries.  
+
+### Section 1: Exploratory Data Analysis
+
+```{r, fig.height=5, fig.width=10, echo=FALSE}
+# Load in the data for argentina
+argentina <- read_excel("argentina.xlsx")
+argentina = as.data.frame(argentina)
+# province is coded as a character variable, when it is a factor variable... 
+argentina$province = as.factor(argentina$province)
+# Missing province Tierra del Fuego
+
+# add columns for pop in percentage and gdp per capita
+argentina = argentina %>% mutate(GDP_per_capita = gdp/pop, pop_percent = pop/sum(pop)*100)
+
+# Changing the column names for more tidy plots
+argentina_tidy_names = argentina
+colnames(argentina_tidy_names) = c('Province','GDP','Illiteracy Rate' ,'Poverty Rate',
+                             'Infrastructure Deficiency','School Dropout Rate',
+                             'Healthcare Center Deficiency','Birth Mortality',
+                             'Population','Movie Theaters per Capita', 
+                             'Doctors per Capita', 'GDP per Capita',
+                             'Population Percentage')
+
+# building the shape data frames here
+
+# for some reason it only knits on my laptop when gadm41_ARG_1.shp is inside a folder?
+ARG = sf::st_read(dsn = "gadm41_ARG_shp/gadm41_ARG_1.shp", quiet = TRUE)
+ARG = ARG %>% filter(NAME_1 != 'Ciudad de Buenos Aires')
+argentina_shape_data = full_join(ARG, argentina_tidy_names ,by = c("NAME_1" = "Province") )
+```
+
+The main inferences from the summary statistics (table 1) computed were the spread of Interquartile range values compared to the mean of the various indicator variables. This initially could suggest that provinces have varying levels of development; looking that the minimum/maximum values, particularly poor/good in some areas of socio-economic development. We also note that we have no data for the province `Tierra del Fueg`. 
+
+```{r arg_gdp_per_cap, fig.height=12, fig.width=17, out.width = "85%", echo=FALSE, fig.cap = "Left: How does GDP per capita change for each province in Argentina, and how it relates to the poverty rate and population in percent. Right: How does `Doctors per capita` change for each province in Argentina, and how it relates to `Healthcare Center Deficiency` and GDP in percent (proportion of the total GDP for the 22 provinces in Argentina, no data for Tierra del Fueg)."}
+
+p1 = argentina_tidy_names %>% 
+  # re order in order of gpd per capita so it is more intuitive to read
+  ggplot(aes(x = reorder(Province, `GDP per Capita`), 
+                         y = `GDP per Capita`, fill = `Poverty Rate`)) + 
+  # create bar plot
+  geom_bar(stat = "identity") + 
+  # x axis test at 90 degree angle
+  # label the x and y axis, then provide appropriate title
+  labs(x = "\n Province", y = "GDP per Capita", title = "GDP per Capita by Province") +
+  # add the Pop. in % text to each province inside the bars in while colour
+  geom_text(aes(x = reorder(Province, `GDP per Capita`), 
+                         y = `GDP per Capita`,  
+                label = scales::percent(round(Population/sum(Population), 4))
+                ,hjust = 1.5, colour = "white"), fontface = "bold") +
+  # produce a custom legend which is informative
+  scale_colour_manual(values = "White", name = 'Province Pop.\nIn %', label = 'Pop. %') +
+  # flip the scales! 
+  coord_flip() 
+
+p2 = argentina_tidy_names %>% 
+  # re order in order of gpd per capita so it is more intuitive to read
+  ggplot(aes(x = reorder(Province, `Doctors per Capita`), 
+                         y = `Doctors per Capita`, fill = `Healthcare Center Deficiency`)) + 
+  # create bar plot
+  geom_bar(stat = "identity") + 
+  # x axis test at 90 degree angle
+  # label the x and y axis, then provide appropriate title
+  labs(x = "\n Province", y = "Doctors per Capita", title = "Doctors per Capita by Province") +
+  # add the Pop. in % text to each province inside the bars in while colour
+  geom_text(aes(x = reorder(Province, `Doctors per Capita`), 
+                         y = `Doctors per Capita`,  
+                label = scales::percent(round(GDP/sum(GDP), 4))
+                ,hjust = 1.5, colour = "white"), fontface = "bold") +
+  # produce a custom legend which is informative
+  scale_colour_manual(values = "White", name = 'GDP In %', label = 'GDP %') +
+  # flip the scales! 
+  coord_flip() 
+  gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+In the left plot of figure 1, we observe that the three provinces with the highest GPD per capita are `Santa Cruz`, `Neuquein` and  `Chubut`; whereas, the three provinces with the lowest GPD per capita are `Formosa`, `Corrientes` and  `Misiones`. In fact, the eight provinces with the lowest GPD per capita reside in the north of Argentina (figure 7), and all have a higher than average poverty rate. We observe that there is a negative correlation between poverty rate and GPD per capita. One also observes that the province `Buenos Aires` holds $42\%$ and $44\%$ Argentina's total population and GDP respectively over the $22$ provinces. Therefore we hypothesize that `Buenos Aries` is a true outlier. Despite `Buenos Aries` having an approximately average GDP per capita, it has an above average poverty rate, and due to population size, a huge number of people living in poverty. This preliminary evidence suggests that `Buenos Aires` might have a very diverse population in terms of socio-economic prosperity. 
+
+The right plot of Figure 1 highlights the provinces with the highest and lowest doctors per capita; namely, `Córdoba`, `Santa Fe` and `San Luis`, and `Formosa`, `Misiones` and `Santiago del Estero` respectively. Similarly, the six provinces with the lowest doctors per capita reside in the north of Argentina, and all have higher than average healthcare center deficiency (figure 8). Interestingly, the province with the highest GPD per capita, `Santa Cruz`, has a low doctors per capita and low healthcare center deficiency. One explanation may be due to `Santa Cruz` having a low poverty rate and population i.e. health standards may be higher so there is less demand for doctors compared to other provinces in Argentina. Interestingly, `Córdoba` and `Santa Fe` also have a high population and GPD, and a low poverty rate. 
+
+```{r fig.height=9, fig.width=11,out.width = "70%", echo=FALSE, fig.cap= "Correlation matrix of Argentina indicator variables. Blue and Red indicate positive and negative correlation respectively"}
+# making a correlation plot of all the argentina variables. Excluding percentage pop since it is a rescaling of population
+corrplot(corr = cor(
+    argentina_tidy_names |> 
+        select(-`Population Percentage`, -Province)), 
+    order = "AOE", diag = FALSE, col = COL2('RdBu', 10), 
+    tl.col = "red", tl.srt = 0, type = 'lower', title = 
+      "\n \n \n Correlation Plot of Argentina Data Variables") 
+```
+
+As expected, from figure 2, we observe that socio-economic indicators were interrelated and correlated with each other. Figure 2 provides the relationships that one expects too see, for example,  
+
+- `Healthcare Centre Deficiency`, `Poverty Rate` and `Illiteracy Rate` are all significantly negatively correlated with `Movie Theatres per Capita`, `GPD per Capita` and `Doctors per Capita`. 
+
+- `Iliteracy Rate` is significantly positively correlated with `Healthcare Centre Deficiency`, `Poverty Rate` and `School Dropout Rate`. 
+
+- `Population` is strongly correlated with `GPD`. `Birth Mortality` is positively correlated to `School Dropout Rate`
+
+From the exploratory data analysis conducted in section 1, we provide preliminary evidence that the provinces that will need highest priority are the northern provinces of Argentina (figures 1, 7, 8). More specifically, we suspect the group of high priority provinces includes `Corrientes`, `Chaco`, `Formosa`, `Jujuy`, `Misiones`, `Salta` and `Santiago del Estero` (figures 1, 7, 8). 
+
+## Section 2: PCA and Clustering Analysis
+
+\textbf{Overview of Analysis: }In figure 2 we observed that socio-economic indicators are highly correlated, which is an essential pre-requisite for PCA. In this section we use PCA and clustering to analyse the underlying patterns in the data, and categorise each province in terms of province development level. It is important to note that some of the indicators in the Argentina data set where not adjusted for the number of people living in each province. However, allowing the inclusion of these indicators allowed us to determine a reduced data set containing only four uncorrelated principle components (figures 9, 16). To avoid any bias with different numbers of residents across provinces, scaling was computed before applying PCA. In section 2 we hypothesized that `Buenos Aires` was a true outlier; `kmeans` and `hierarchical` clustering methods confirmed this (figures 10, 11, 12). Therefore, we decided to exclude `Buenos Aires` from further analysis with the aim to find a better cluster solution.  Two options were investigated: one involved removing `Bueonos Aires` from both clustering algorithms (figures 13, 14, 15), the other involved removing `Bueonos Aires` before computing the principle components and both clustering algorithms (figures 18, 19, 4). The latter was chosen. One reason for this was that  `Bueonos Aires` represents $42\%$ and $43\%$ of Argentina's population and GPD respectively (figure 1). Therefore, it is particularly important to treat this province carefully, so it was decided to analyse the development level of `Bueonos Aires` based on the results from section 1. In all scenarios considered, four principle components were enough to explain at least 80% of the variance (figure 16). This method of choosing the number of principle components was preferred due to the number of provinces being larger than the number of indicator variables. 
+
+```{r fig.height =7, fig.width=17, echo = FALSE, fig.cap="A selection of Bi-plots to visualize the patterns, not evident in the raw Argentina data, uncovered by PCA. Note: `Buenos Aires` excluded from PCA"} 
+# making the province column the index!
+argentina_tidy_names_numeric = argentina_tidy_names
+rownames(argentina_tidy_names_numeric)= argentina_tidy_names_numeric$Province
+# I have chosen not to include population percentage since when we scale in PCA it will give the same values as population. 
+
+argentina_tidy_names_numeric = argentina_tidy_names_numeric %>% 
+  filter(Province != 'Buenos Aires') %>% 
+  select(-Province,-`Population Percentage`)
+
+
+tidyPCA = argentina_tidy_names_numeric %>%
+    scale() %>%    # --- Scale the variables
+    prcomp()       # --- Run prcomp (possible via the broom package)
+
+# first four principle components 
+kmeans_input = as.data.frame(tidyPCA[["x"]][,1:4])
+# plot the 3 biplots
+p1 = fviz_pca_biplot(tidyPCA, axes = c(1,2)) +
+  theme(legend.position="none") + labs(title = 'PCA Biplots')
+p2 = fviz_pca_biplot(tidyPCA, axes = c(1,3)) + 
+  theme(legend.position="none") + labs(title = '')
+p3 = fviz_pca_biplot(tidyPCA, axes = c(1,4)) + 
+  labs(title = '')
+gridExtra::grid.arrange(p1, p2,p3, ncol = 3)
+```
+
+\textbf{Principle Component Pattens: }The first principle component explains $45.3\%$ of the variance and correlates the most with `Healthcare Center Deficiency` (-0.387), `Poverty Rate` (-0.383) and `Illiteracy Rate` (-0.377) (figures 3, 17 and table 2). In fact, we observe that the first principle component is strongly negatively correlated with the above three variables and `Infrastructure Deficiency`, `School Dropout Rate`, `Birth Mortality`; and, moderately positively correlated with `GPD per Captia` and `Movie Theaters per Capita`. The second principle component explains $20.3\%$ of the variance, correlates the most with `GDP` (-0.530) and `Population` (-0.619), and `Doctors per Capita` (-0.376) (figures 3, 17 and table 2), and is strongly negatively correlated to `GPD`, `Population` and `Doctors per Capita`. We also observe that the main contributions to the third and fourth principle components are from `Birth Mortality` and `Movie Theatres per Capita`, and, `Infrastructure Deficiency` and `School Dropout Rate` respectively (figures 3, 17 and table 2).
+
+The sample Bi-plots in figure 3 therefore aid visualization and identification of clusters of provinces with similar development levels. The first principle component seems to represent a 'social vulnerability score', with provinces such as `Chaco` and `Misiones` being significantly more socially vulnerable than provinces like `Santa Cruz` and `La Pampa`. We may interpret provinces similar to `San Juan` and `Santa Fe` being socially vulnerable for some characteristics. For example, `Santa Fe` has contrasting characteristics i.e. large `School Dropout Rate` and `Doctors Per Capita`. Therefore, the first principle component indicates three different clusters: developed (`Santa Cruz`,`La Pampa`, etc.), emerging (`San Juan`, `San Luis`, etc.), and developing (`Misiones`,`Chaco` etc.) respectively. The second principle component is the driving factor between the segregation of `Santa Fe` and `Córdoba` from provinces such as `San Luis`, suggesting a fourth cluster. The conclusions drawn are also supported by analysis conducted in section 1 (figure 1)
+
+```{r, echo = FALSE, fig.height =5, fig.width=15, out.width="90%", fig.cap="Hierarchical clustering using ward linkage cutting at four clusters. Note: Ward linkage is based on the multidimensional variance like PCA so is certainly theoretically the best choice for clustering with our compressed Argentina data."}
+set.seed(123123)
+
+# hierarchical clustering on four clusters using ward linkage
+clust = agnes(kmeans_input, method = "ward")
+cluster_count = 4
+pltree(clust, cex = 0.6, hang = -1, main = "Dendrogram with Ward linkage", sub = '', xlab = 'Province')
+rect.hclust(clust, k = cluster_count, border = rainbow(cluster_count))
+```
+
+One reason ward linkage was used is because it had a higher agglomerative coefficient (0.868) than complete (0.820), average (0.735) and single (0.520) linkage. We choose to cut the dendrogram into four clusters because this division yields distinct clusters that align well with the analysis completed in section 1 and offer meaningful insights. Looking at the branch heights, the purple clustering is very dissimilar from the other three clusters (figure 4). And Indeed, notice that if it was decided to cut at three clusters, merging red and green (figure 4) produces a new heterogeneous cluster. Despite the increment of internal cohesion (total WCV) of the clusters starting to be negligible after approximately $3$ clusters (figure 18), a sharp increase in the gap statistic was observed at $4$ clusters (figure 18). Therefore, we also consolidate these clusters by computing the `kmeans` algorithm and observing that only the provinces `Neuquén` and `Jujuy` change clusters (figure 19). 
+
+```{r fig.height =5.5, fig.width=17, echo = FALSE, fig.cap = "Sample of Socio-economic indicator distributions for different Province Development Levels"}
+# order of the clusterings from left to right on dendrogram
+Province_den_order=clust$order
+
+# label each cluster with 1,2,3 or 4
+Province_cluster_label = c(1,1,1,1,1,1,1,1,1,2,2,2,3,3,4,4,4,4,4,4,4)
+
+# reorder the clusterings to assign correct value to the data frame
+cluster_results = as.data.frame(Province_cluster_label[order(Province_den_order)])
+
+# a pretty name
+colnames(cluster_results)[1] = 'Province Development Level'
+
+# for pretty legend which is informative 
+cluster_results = cluster_results %>% mutate(`Province Development Level` = case_when(
+  `Province Development Level` == 2 ~ 'Developed', 
+  `Province Development Level` == 4 ~ 'Developing', 
+  `Province Development Level` == 3 ~ 'Emerging Group 1', 
+  `Province Development Level` == 1 ~ 'Emerging Group 2'))
+
+# removing buenos aires
+Province_dev_level_tidy = argentina_tidy_names %>% filter(Province !='Buenos Aires')
+# adding development levels to data frame
+Province_dev_level_tidy$Development = cluster_results$`Province Development Level`
+
+# producing a selection box plots for 5 indicators
+Province_dev_level_tidy %>% 
+  select(Development, `Illiteracy Rate`, `Healthcare Center Deficiency`, 
+         `GDP per Capita`, `Doctors per Capita`, `Poverty Rate`) %>% 
+  pivot_longer( cols = 2:6 , names_to = 'measures') %>% rename('Level' = value)  %>%
+  ggplot(aes(x = reorder_within(Development, Level, measures), y = Level)) +
+  
+  # making the grid 1 by 5, with the y axis free
+  
+  ggh4x::facet_grid2(.~measures, scales = 'free', independent = "y") + 
+  geom_boxplot() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_x_reordered() + labs(x = 'Province Development Level', y = '' , title='Sample of Socio-economic indicator distributions for different Province Development Levels') 
+```
+
+\textbf{Development Groupings: }With the exclusion of `Buenos Aires`, the remaining regions were clustered into four separate development levels: Developed, Emerging Group 1, Emerging group 2, and Developing (figure 6). It was decided for `Buenos Aires` to be classified as an emerging province. This was because excluding population and GPD, it holds sufficiently similar attributes to emerging group 2 (figure 1). From the dendrogram branch heights (figure 4), it is clear that there is a significant difference between the attributes of the developing provinces, and the emerging and developed provinces. This difference is much more significant than differences obtained between emerging and developed. Figure 5 illustrates that developed provinces have sufficient levels of most of the desired attributes, and developing countries have none (figures 6, 20, 21). Whereas, emerging provinces hold a mixture of desirable and undesirable attributes, such as emerging group 1 having a high `Doctors per Capita`, but a high `illiteracy rate`. We note the significance of these findings in terms of population effected. Developed provinces hold $2.97\%$ of the population compared to developing $17.4\%$ and emerging $79.63\%$. By far the majority of people live in provinces with either very poor or mixed demographics in terms of socio-economic prosperity. 
+
+```{r fig.height=8.5, fig.width=15, out.width = "85%" ,echo = FALSE, fig.cap="Province Development Levels across Argentina"}
+
+# this stops a bug later on in code!
+cluster_results_1 = cluster_results
+
+# adding provinces to data frame so the full join works
+temp =argentina_tidy_names %>% 
+  filter(Province != 'Buenos Aires') %>% 
+  select(,-`Population Percentage`) %>% select(Province) 
+cluster_results_1$Province = temp$Province
+
+# adding the cluster allcoations to the shape data frame 
+arg_shape_full = full_join(argentina_shape_data, cluster_results_1, by = c('NAME_1' = 'Province'))
+colnames(ARG)[4] = 'Province'
+
+# adding buenos aries to the legend
+arg_shape_full[1,24] = 'Buenos Aires'
+
+# plotting the clusters on the shape file of Argentina 
+p2 = ggplot(data = ARG) + theme_bw() + 
+  geom_sf(data =arg_shape_full, aes(fill =`Province Development Level` ), colour = 'white') + 
+  labs(title = 'Province Developement Levels in Argentina') 
+# making sure you can see the labels and altering chunk settings as required
+p2 = p2 + ggrepel::geom_label_repel(
+    data = ARG,
+    aes(label = Province, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0, 
+    size = 3) + 
+  labs(x = 'Longitute', y='Latitude' )
+p2
+```
+
+```{r fig.height=12, fig.width=17, echo = FALSE, eval = FALSE}
+p1 = argentina_tidy_names %>% 
+  # re order in order of gpd per capita so it is more intuitive to read
+  ggplot(aes(x = reorder(Province, `Illiteracy Rate`), 
+                         y = `Illiteracy Rate`, fill = `School Dropout Rate`)) + 
+  # create bar plot
+  geom_bar(stat = "identity") + 
+  # x axis test at 90 degree angle
+  # label the x and y axis, then provide appropriate title
+  labs(x = "\n Province", y = "Illiteracy Rate", title = "Illiteracy Rate by Province") +
+  # add the Pop. in % text to each province inside the bars in while colour
+  geom_text(aes(x = reorder(Province, `Illiteracy Rate`), 
+                         y = `Illiteracy Rate`,  
+                label = scales::percent(round(Population/sum(Population), 4))
+                ,hjust = 1.05, colour = "white"), fontface = "bold") +
+  # produce a custom legend which is informative
+  scale_colour_manual(values = "White", name = 'Province Pop.\nIn %', label = 'Pop. %') +
+  # flip the scales! 
+  coord_flip() 
+
+p2 = argentina_tidy_names %>% 
+  # re order in order of gpd per capita so it is more intuitive to read
+  ggplot(aes(x = reorder(Province, `Infrastructure Deficiency`), 
+                         y = `Infrastructure Deficiency`, fill = `Movie Theaters per Capita`)) + 
+  # create bar plot
+  geom_bar(stat = "identity") + 
+  # x axis test at 90 degree angle
+  # label the x and y axis, then provide appropriate title
+  labs(x = "\n Province", y = "Infrastructure Deficiency", title = "Infrastructure Deficiency by Province") +
+  # add the Pop. in % text to each province inside the bars in while colour
+  geom_text(aes(x = reorder(Province, `Infrastructure Deficiency`), 
+                         y = `Infrastructure Deficiency`,  
+                label = scales::percent(round(GDP/sum(GDP), 4))
+                ,hjust = 1.15, colour = "white"), fontface = "bold") +
+  # produce a custom legend which is informative
+  scale_colour_manual(values = "White", name = 'GDP In %', label = 'GDP %') +
+  # flip the scales! 
+  coord_flip() 
+  gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+### Section 3: Conclusion
+
+All developing (high priority) provinces are in the north of Argentina, with developed provinces in the south of Argentina. Developing provinces share characteristics such as high `Illiteracy Rate`, `Poverty Rate`, `Infrastructure Deficiency`, `Birth Mortality`, `Healthcare Center Deficiency`, and `School Dropout Rate`, and low `GDP per Capita`, and `Movie Theaters per Capita`. In contrast, developed provinces display the opposite characteristics: high `GDP per Capita` and `Movie Theaters per Capita`, and low `Illiteracy Rate`, `Poverty Rate`, `Infrastructure Deficiency`, `Birth Mortality` and `School Dropout Rate`. Emerging provinces have varying levels of the socio-economic indicators above, and are located  in the middle of Argentina. Our study had some limitations. First, we did not consider the proportion of possible undocumented events. For example hypothetically, the socio-economic influence COVID-19 had on indicator variables for different provinces is not represented in the methodology. Furthermore, we cannot completely exclude the effects that `Tierra del Fueg` might have on the province development levels or our analysis. Therefore, further research and data should be completed and collected to refine our interpretations. Further analyses should include additional indicators that have the potential to influence the province development groups allocated, such as life expectancy, population density, crime rates etc. A natural extension to this consulting project would be to investigate spatial dependence with the aim of identify global and regional patterns in the data (global and local morans I tests). Our findings provide evidence for spatial dependencies for different socio-economic indicator variables across Argentina, particularly the northern provinces (figures 7, 8). Supervised learning techniques could be applied to assess previous impacts of implemented public policies. Hence, aid decision making for new public policies to help improve the life of Argentinians, particularly those living in developing provinces in the north. In terms of possible public policies, the report suggested direct investment into high priority provinces in education systems (e.g. figures 1,4,6,17,20). This intern should reduce the school dropout rate and illiteracy rate, fostering socio-economic development and reducing poverty. The report also recognized that major funding is needed in high priority provinces in healthcare centers (e.g. figures 1,4,6,17,20). This would not only attract more doctors, but also reduce the poverty rate.
+
+\newpage
+
+```{r, eval = FALSE, echo = FALSE}
+
+### I had to put the Generative AI Statement here because I was having really weird issues with knitting when it was at the bottom of the .rmd file. Couldn't fix them... Having the statement here seemed to fix most of the issues? 
+
+```
+
+## Generative AI Statement
+
+No generative AI was used in the creation of this report. 
+
+## Appendix 
+
+### Tables
+
+```{r, fig.height =10, fig.width=10, echo = FALSE, caption = ""}
+
+# grab the tidy names to make the table look more interpretable
+argentina_tidy_names_numeric_1 = argentina_tidy_names
+# make province the index
+rownames(argentina_tidy_names_numeric_1)= argentina_tidy_names_numeric_1$Province
+argentina_tidy_names_numeric_1 = argentina_tidy_names_numeric_1 %>% select(-Province)
+# call the summary table from the package vtable as so, then make sure it doesnt move in the LaTeX R markdown pdf. 
+# Couldnt figure out how to remove the 'table 1' above the summary table unfortunately? 
+# would be curious if there is a solution?
+
+st(argentina_tidy_names_numeric_1, out = 'kable', title = 'Initial Summary Statistics for Argentinian Province Data') %>% kable_styling(latex_options = "hold_position")
+```
+
+Table 1: Summary statistics
+
+```{r, fig.height =10, fig.width=10, echo = FALSE, fig.cap ="Raw contributions for principle components computed excluding `Buenos Aires`"}
+# Principle component 1-4 contribution table. Table does not move when kable styling is used! 
+kable(as.data.frame(tidyPCA$rotation) %>% select(PC1, PC2, PC3, PC4)) %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+Table 2: Raw contributions for principle components computed excluding `Buenos Aires`
+
+```{r, fig.height=9, fig.width=15, echo = FALSE,fig.cap = "Poverty rate for Provinces in Argentina" }
+# Poverty rate for Provinces in Argentina map
+colnames(ARG)[4] = 'Province'
+
+# grab the map and plot the poverty rate on it
+p2 = ggplot(data = ARG) + theme_bw() + 
+  geom_sf(data =argentina_shape_data, aes(fill =`Poverty Rate`), colour = 'white') + 
+  labs(title = 'Poverty rate for Provinces in Argentina') +
+  
+  # This adds the labels dynamically with space 
+  ggrepel::geom_label_repel(
+    data = ARG,
+    aes(label = Province, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0, 
+    size = 3)  + labs(x = 'Longitute', y='Latitude' )
+p2
+```
+
+### Figures
+
+```{r, fig.height=9, fig.width=15, echo = FALSE, fig.cap = "Healthcare Center Deficiency for Provinces in Argentina" }
+# Healthcare Center Deficiency for Provinces in Argentina map
+p2 = ggplot(data = ARG) + theme_bw() + 
+  geom_sf(data =argentina_shape_data, aes(fill =`Healthcare Center Deficiency`), colour = 'white') + 
+  labs(title = 'Healthcare Center Deficiency for Provinces in Argentina') 
+  # This adds the labels dynamically with space 
+p2 = p2 + ggrepel::geom_label_repel(
+    data = ARG,
+    aes(label = Province, geometry = geometry),
+    stat = "sf_coordinates",
+    min.segment.length = 0, 
+    size = 3) + 
+  labs(x = 'Longitute', y='Latitude' )
+p2
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+
+# I choose to load in the data again. This fixes some of the bugs I was having with variable names...
+
+```
+
+
+```{r, fig.height=9, fig.width=10, echo=FALSE, message = FALSE}
+# Load in the data for argentina
+argentina <- read_excel("argentina.xlsx")
+argentina = as.data.frame(argentina)
+# province is coded as a character variable, when it is a factor variable... 
+argentina$province = as.factor(argentina$province)
+# Missing province Tierra del Fuego
+
+# add columns for pop in percentage and gdp per capita
+argentina = argentina %>% mutate(GDP_per_capita = gdp/pop, pop_percent = pop/sum(pop)*100)
+
+# Changing the column names for more tidy plots
+argentina_tidy_names = argentina
+colnames(argentina_tidy_names) = c('Province','GDP','Illiteracy Rate' ,'Poverty Rate',
+                             'Infrastructure Deficiency','School Dropout Rate',
+                             'Healthcare Center Deficiency','Birth Mortality',
+                             'Population','Movie Theaters per Capita', 
+                             'Doctors per Capita', 'GDP per Capita',
+                             'Population Percentage')
+
+# making the province column the index!
+argentina_tidy_names_numeric = argentina_tidy_names
+rownames(argentina_tidy_names_numeric)= argentina_tidy_names_numeric$Province
+# I have chosen not to include population percentage since when we scale in PCA it will give the same values as population. 
+argentina_tidy_names_numeric = argentina_tidy_names_numeric %>% select(-Province,-`Population Percentage`)#, -`GDP`, -`Population`)
+tidyPCA = argentina_tidy_names_numeric %>%
+    scale() %>%    # --- Scale the variables
+    prcomp()       # --- Run prcomp (possible via the broom package)
+```
+
+```{r, fig.height=5, fig.width=10, echo=FALSE, out.width = "90%", message = FALSE, fig.cap="Note `Buenos Aires` included in PCA for principle components (only 10 displayed). Left plot shows a scree plot for total variance explained by each principle component. Right plot shows the cumulative variance explained at each principle component."}
+# Scree plots
+p1 = tidyPCA %>%
+    tidy("pcs") %>% 
+    ggplot(aes(x = PC, y = percent)) + 
+    geom_col(fill = "dodgerblue", alpha = 0.7) +
+    scale_y_continuous(labels = scales::label_percent(), breaks = scales::breaks_pretty(n = 6)) +
+    labs(y = "Variance explained", title = "Scree plot") + 
+    theme_light()
+p2 = tidyPCA %>%
+    tidy("pcs") %>%     
+    ggplot(aes(x = PC, y = cumulative)) + 
+    geom_point(size = 4) +
+    geom_line(color = "dodgerblue", size = 2) + 
+    scale_y_continuous(labels = scales::label_percent(), breaks = scales::breaks_pretty(n = 6)) + 
+    labs(y = "Cumulative Variance explained", title = "Scree plot") + 
+    theme_light()
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+
+```{r, fig.height=5, fig.width=10, echo=FALSE, message = FALSE}
+# input matrix for k means or clustering 
+kmeans_input = as.data.frame(tidyPCA[["x"]][,1:4])
+```
+
+
+```{r, fig.height=5, fig.width=10, echo=FALSE, out.width = "90%", message = FALSE, fig.cap="Note `Buenos Aires` included in PCA. Left plot shows the increment of internal cohesion (total WCV) with respect to the number of clusters. Right plot shows the value of the gap-statistic with respect to the number of clusters"}
+# Total WCV and Gap statistic plots
+K=21
+p1 = fviz_nbclust(kmeans_input, FUNcluster = kmeans, method = "wss", k.max = K, nboot = 100) +
+    theme_light() + labs(subtitle = "Total WCV", y = "")
+p2 = fviz_nbclust(kmeans_input, FUNcluster = kmeans, method = "gap_stat", k.max = K, nboot = 100) +
+    theme_light() + labs(subtitle = "Gap statistic", title = "", y = "")
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r, fig.height=5, fig.width=10, echo=FALSE, fig.cap="Note `Buenos Aires` included in PCA and clustering, and ward linkage agglomerative coefficient closest to one. Ward linkage dendrograms with cutting at three and four clusters. `Buenos Aries` remains alone. "}
+# run clustering algorithm
+clust = agnes(kmeans_input, method = "ward")
+cluster_count = 3
+# Dendrograms side by side
+par(mfrow = c(1,2))
+# --- Dendrogram with Ward linkage
+pltree(clust, cex = 0.6, hang = -1, main = "Dendrogram with Ward \nlinkage: three clusters", sub = '', xlab = 'Province')
+rect.hclust(clust, k = cluster_count)
+pltree(clust, cex = 0.6, hang = -1, main = "Dendrogram with Ward \nlinkage: four clusters", sub = '', xlab = 'Province')
+rect.hclust(clust, k = cluster_count+1)
+```
+
+```{r, fig.height =7, fig.width=17, echo = FALSE, fig.cap="Note `Buenos Aires` included in PCA and clustering. K-means clustering for $3$ and $4$ pre-defined clusters. `Buenos Aries` remains alone. "}
+# define the number of clusters 
+k=3
+ # run the k-means algorithm
+km.out = kmeans(x = kmeans_input, centers = k, nstart = 100)
+# plot the k-means clusters
+p1 = fviz_cluster(km.out, data = kmeans_input, 
+                  elipse.type = "convex", 
+                  main = paste("K-means with K =", k, "clusters")) + 
+  theme_light()
+
+# define the number of clusters 
+k=4
+ # run the k-means algorithm
+km.out = kmeans(x = kmeans_input, centers = k, nstart = 100)
+# plot the k-means clusters
+p2 = fviz_cluster(km.out, data = kmeans_input, 
+                  elipse.type = "convex", 
+                  main = paste("K-means with K =", k, "clusters")) + 
+  theme_light()
+
+# plot the k means cluster plots next to eachother
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r, echo = FALSE, fig.height =7, fig.width=17}
+# making the province column the index!
+argentina_tidy_names_numeric = argentina_tidy_names
+rownames(argentina_tidy_names_numeric)= argentina_tidy_names_numeric$Province
+# I have chosen not to include population percentage since when we scale in PCA it will give the same values as population. 
+# This will make the BIplots more interpretable! 
+argentina_tidy_names_numeric = argentina_tidy_names_numeric %>% select(-Province,-`Population Percentage`)#, -`GDP`, -`Population`)
+tidyPCA = argentina_tidy_names_numeric %>%
+    scale() %>%    # --- Scale the variables
+    prcomp()       # --- Run prcomp (possible via the broom package)
+
+kmeans_input = as.data.frame(tidyPCA[["x"]][,1:4])
+```
+
+```{r, echo = FALSE, fig.height =7, fig.width=17, out.width = "90%", fig.cap="Note, `Buenos Aires` in PCA but not in Clustering algorithms. Left plot shows the increment of internal cohesion (total WCV) with respect to the number of clusters. Right plot shows the value of the gap-statistic with respect to the number of clusters"}
+# gap stat and Total WCV plots 
+K = 20
+p1 = fviz_nbclust(kmeans_input[-1,], FUNcluster = kmeans, method = "wss", k.max = K, nboot = 100) +
+    theme_light() + labs(subtitle = "Total WCV", y = "")
+p2 = fviz_nbclust(kmeans_input[-1,], FUNcluster = kmeans, method = "gap_stat", k.max = K, nboot = 100) +
+    theme_light() + labs(subtitle = "Gap statistic", title = "", y = "")
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r, fig.height=5, fig.width=10, echo=FALSE, fig.cap= "Note `Buenos Aires` included in PCA, not included in clustering, and ward linkage agglomerative coefficient closest to one. Ward linkage dendrograms with cutting at three and four clusters."}
+clust = agnes(kmeans_input[-1, ], method = "ward")
+cluster_count = 3
+# Dendrograms side by side
+par(mfrow = c(1,2))
+# --- Dendrogram with Ward linkage
+pltree(clust, cex = 0.6, hang = -1, main = "Dendrogram with Ward \nlinkage: three clusters", sub = '', xlab = 'Province')
+rect.hclust(clust, k = cluster_count)
+pltree(clust, cex = 0.6, hang = -1, main = "Dendrogram with Ward \nlinkage: four clusters", sub = '', xlab = 'Province')
+rect.hclust(clust, k = cluster_count+1)
+```
+
+```{r, fig.height=5, fig.width=10, echo=FALSE, fig.cap="Note `Buenos Aires` included in PCA but not in clustering. K-means clustering for $3$ and $4$ pre-defined clusters."}
+# define the number of clusters 
+k=3
+ # run the k-means algorithm
+km.out = kmeans(x = kmeans_input[-1, ], centers = k, nstart = 100)
+# plot the k-means clusters
+p1 = fviz_cluster(km.out, data = kmeans_input[-1, ], 
+                  elipse.type = "convex", 
+                  main = paste("K-means with K =", k, "clusters")) + 
+  theme_light()
+
+# define the number of clusters 
+k=4
+ # run the k-means algorithm
+km.out = kmeans(x = kmeans_input[-1, ], centers = k, nstart = 100)
+# plot the k-means clusters
+p2 = fviz_cluster(km.out, data = kmeans_input[-1, ], 
+                  elipse.type = "convex", 
+                  main = paste("K-means with K =", k, "clusters")) + 
+  theme_light()
+
+# plot the k means cluster plots next to eachother
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r, echo = FALSE, fig.height =7, fig.width=17}
+# making the province column the index!
+argentina_tidy_names_numeric = argentina_tidy_names
+rownames(argentina_tidy_names_numeric)= argentina_tidy_names_numeric$Province
+# I have chosen not to include population percentage since when we scale in PCA it will give the same values as population. 
+
+argentina_tidy_names_numeric = argentina_tidy_names_numeric %>% 
+  filter(Province != 'Buenos Aires') %>% 
+  select(-Province,-`Population Percentage`)
+
+
+tidyPCA = argentina_tidy_names_numeric %>%
+    scale() %>%    # --- Scale the variables
+    prcomp()       # --- Run prcomp (possible via the broom package)
+```
+
+```{r, echo = FALSE, fig.height =7, fig.width=17, out.width = "90%", fig.cap="Note `Buenos Aires` not in PCA for principle components (only 10 displayed). Left plot shows a scree plot for total variance explained by each principle component. Right plot shows the cumulative variance explained at each principle component."}
+# Scree plots fron lecture notes
+p1 = tidyPCA %>%
+    tidy("pcs") %>% 
+    ggplot(aes(x = PC, y = percent)) + 
+    geom_col(fill = "dodgerblue", alpha = 0.7) +
+    scale_y_continuous(labels = scales::label_percent(), breaks = scales::breaks_pretty(n = 6)) +
+    labs(y = "Variance explained", title = "Scree plot") + 
+    theme_light()
+p2 = tidyPCA %>%
+    tidy("pcs") %>%     
+    ggplot(aes(x = PC, y = cumulative)) + 
+    geom_point(size = 4) +
+    geom_line(color = "dodgerblue", size = 2) + 
+    scale_y_continuous(labels = scales::label_percent(), breaks = scales::breaks_pretty(n = 6)) + 
+    labs(y = "Cumulative Variance explained", title = "Scree plot") + 
+    theme_light()
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r fig.height=10, fig.width=12, echo = FALSE, fig.cap = "Note `Buenos Aires` not in PCA. Contribution of socio-economic indicator variables to principle components 1-4"}
+# contributions of each indicator variable to each principle component 
+# same code as the lecture notes
+p1 = fviz_contrib(tidyPCA, choice = "var", axes = 1) + 
+    labs(x = "Variable", title = "Contribution of variables to PC1") + 
+    theme_light() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+p2 = fviz_contrib(tidyPCA, choice = "var", axes = 2) + 
+    labs(x = "Variable", title = "Contribution of variables to PC2") + 
+    theme_light() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+p3 = fviz_contrib(tidyPCA, choice = "var", axes = 3) + 
+    labs(x = "Variable", title = "Contribution of variables to PC3") + 
+    theme_light() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+p4 = fviz_contrib(tidyPCA, choice = "var", axes = 4) + 
+    labs(x = "Variable", title = "Contribution of variables to PC4") + 
+    theme_light() + theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+gridExtra::grid.arrange(p1, p2, p3, p4, ncol = 2)
+```
+
+```{r, echo = FALSE, fig.height =7, fig.width=17}
+# input matrix for clustering algorithms
+kmeans_input = as.data.frame(tidyPCA[["x"]][,1:4])
+```
+
+```{r, echo = FALSE, fig.height =7, fig.width=17, out.width = "90%", fig.cap = "Note, `Buenos Aires` not PCA. Left plot shows the increment of internal cohesion (total WCV) with respect to the number of clusters. Right plot shows the value of the gap-statistic with respect to the number of clusters"}
+#Total WCV and Gap statistic plots
+K = 20
+p1 = fviz_nbclust(kmeans_input, FUNcluster = kmeans, method = "wss", k.max = K, nboot = 100) +
+    theme_light() + labs(subtitle = "Total WCV", y = "")
+p2 = fviz_nbclust(kmeans_input, FUNcluster = kmeans, method = "gap_stat", k.max = K, nboot = 100) +
+    theme_light() + labs(subtitle = "Gap statistic", title = "", y = "")
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r, echo = FALSE, fig.height =7, fig.width=17}
+# clusters from ward dendrogram
+clust = agnes(kmeans_input, method = "ward")
+```
+
+```{r, fig.height =7, fig.width=17, echo = FALSE, fig.cap = "Note `Buenos Aires` not in PCA. K-means clustering for $3$ and $4$ pre-defined clusters."}
+# define the number of clusters 
+k=3
+ # run the k-means algorithm
+km.out = kmeans(x = kmeans_input, centers = k, nstart = 100)
+# plot the k-means clusters
+p1 = fviz_cluster(km.out, data = kmeans_input, 
+                  elipse.type = "convex", 
+                  main = paste("K-means with K =", k, "clusters")) + 
+  theme_light()
+
+# define the number of clusters 
+k=4
+ # run the k-means algorithm
+km.out = kmeans(x = kmeans_input, centers = k, nstart = 100)
+# plot the k-means clusters
+p2 = fviz_cluster(km.out, data = kmeans_input, 
+                  elipse.type = "convex", 
+                  main = paste("K-means with K =", k, "clusters")) + 
+  theme_light()
+
+# plot the k means cluster plots next to eachother
+gridExtra::grid.arrange(p1, p2, ncol = 2)
+```
+
+```{r fig.height =7, fig.width=17, echo = FALSE, fig.cap="A selection of Bi-plots to visualize the patterns, not evident in the raw Argentina data, uncovered by PCA for each province development level."}
+# order of the clusterings from left to right on dendrogram
+Province_den_order=clust$order
+
+# label each cluster with 1,2,3 or 4
+Province_cluster_label = c(1,1,1,1,1,1,1,1,1,2,2,2,3,3,4,4,4,4,4,4,4)
+
+# reorder the clusterings to assign correct value to the data frame
+cluster_results = as.data.frame(Province_cluster_label[order(Province_den_order)])
+
+# a pretty name
+colnames(cluster_results)[1] = 'Province Development Level'
+
+# for pretty legend which is informative 
+cluster_results = cluster_results %>% mutate(`Province Development Level` = case_when(
+  `Province Development Level` == 2 ~ 'Developed', 
+  `Province Development Level` == 4 ~ 'Developing', 
+  `Province Development Level` == 3 ~ 'Emerging Group 1', 
+  `Province Development Level` == 1 ~ 'Emerging Group 2'))
+
+# plot the 3 biplots
+p1 = fviz_pca_biplot(tidyPCA, axes = c(1,2), habillage = cluster_results$`Province Development Level`) +
+  theme(legend.position="none") + labs(title = 'PCA Biplots with province development levels')
+p2 = fviz_pca_biplot(tidyPCA, axes = c(1,3), habillage = cluster_results$`Province Development Level`) + 
+  theme(legend.position="none") + labs(title = '')
+p3 = fviz_pca_biplot(tidyPCA, axes = c(1,4), habillage = cluster_results$`Province Development Level`) + 
+  labs(title = '')
+gridExtra::grid.arrange(p1, p2,p3, ncol = 3)
+```
+
+```{r, fig.height=10, fig.width=12, echo = FALSE, fig.cap = "Complementory box plots for different indicator variables for each province development group"}
+
+# remove buenos aires
+Province_dev_level_tidy = argentina_tidy_names %>% filter(Province !='Buenos Aires')
+Province_dev_level_tidy$Development = cluster_results$`Province Development Level`
+
+# plot the box plots for all the different indicator variables 
+Province_dev_level_tidy %>% pivot_longer( cols = 2:12 , names_to = 'measures') %>% rename('Level' = value)  %>%
+  ggplot(aes(x = reorder_within(Development, Level, measures), y = Level)) + 
+  
+  # facet wrap around each indicator variable
+  
+  facet_wrap(~measures, scales = 'free') + 
+  geom_boxplot() + 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + scale_x_reordered() + labs(x = 'Province Development Level', y = '' , title='Socio-economic indicator distributions for different Province Development Levels') 
+```
